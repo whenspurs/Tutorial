@@ -1,0 +1,83 @@
+//@version=6
+strategy("BTC Halving Cycle Buy/Sell Strategy", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, initial_capital=10000)
+
+// === INPUTS ===
+halvingCycleDays = input.int(1260, "Halving Cycle Length (days)", minval=100)
+buyStartPct = input.float(0.0, "Buy Zone Start (% into cycle)", minval=0.0, maxval=1.0, step=0.05)
+buyEndPct = input.float(0.45, "Buy Zone End (% into cycle)", minval=0.0, maxval=1.0, step=0.05)
+sellStartPct = input.float(0.65, "Sell Zone Start (% into cycle)", minval=0.0, maxval=1.0, step=0.05)
+sellEndPct = input.float(0.90, "Sell Zone End (% into cycle)", minval=0.0, maxval=1.0, step=0.05)
+useEmaFilter = input.bool(true, "Use EMA Trend Filter")
+emaLen = input.int(200, "EMA Length")
+useRsiFilter = input.bool(true, "Use RSI Overbought Filter")
+rsiLen = input.int(14, "RSI Length")
+rsiOB = input.int(80, "RSI Overbought Level")
+rsiOS = input.int(30, "RSI Oversold Level")
+
+// === HALVING DATES (Unix timestamps, midnight UTC) ===
+// Halving 1: 2012-11-28
+// Halving 2: 2016-07-09
+// Halving 3: 2020-05-11
+// Halving 4: 2024-04-19
+halving1 = timestamp("UTC", 2012, 11, 28, 0, 0)
+halving2 = timestamp("UTC", 2016, 7, 9, 0, 0)
+halving3 = timestamp("UTC", 2020, 5, 11, 0, 0)
+halving4 = timestamp("UTC", 2024, 4, 19, 0, 0)
+
+// === DETERMINE CURRENT CYCLE POSITION ===
+var float cycleProgress = na
+currentTime = time
+
+if currentTime >= halving4
+    daysSinceHalving = (currentTime - halving4) / 86400000
+    cycleProgress := (daysSinceHalving % halvingCycleDays) / halvingCycleDays
+else if currentTime >= halving3
+    daysSinceHalving = (currentTime - halving3) / 86400000
+    cycleProgress := daysSinceHalving / ((halving4 - halving3) / 86400000)
+else if currentTime >= halving2
+    daysSinceHalving = (currentTime - halving2) / 86400000
+    cycleProgress := daysSinceHalving / ((halving3 - halving2) / 86400000)
+else if currentTime >= halving1
+    daysSinceHalving = (currentTime - halving1) / 86400000
+    cycleProgress := daysSinceHalving / ((halving2 - halving1) / 86400000)
+else
+    cycleProgress := na
+
+// === ZONES ===
+inBuyZone = not na(cycleProgress) and cycleProgress >= buyStartPct and cycleProgress <= buyEndPct
+inSellZone = not na(cycleProgress) and cycleProgress >= sellStartPct and cycleProgress <= sellEndPct
+
+// === FILTERS ===
+emaVal = ta.ema(close, emaLen)
+rsiVal = ta.rsi(close, rsiLen)
+
+emaBullish = not useEmaFilter or close > emaVal
+rsiNotOB = not useRsiFilter or rsiVal < rsiOB
+rsiIsOB = useRsiFilter and rsiVal > rsiOB
+
+// === STRATEGY LOGIC ===
+buyCondition = inBuyZone and emaBullish and rsiNotOB
+sellCondition = inSellZone and rsiIsOB
+
+if buyCondition and strategy.position_size == 0
+    strategy.entry("Halving Buy", strategy.long)
+
+if sellCondition and strategy.position_size > 0
+    strategy.close("Halving Buy", comment="Halving Sell")
+
+// Fallback exit at end of sell zone if still holding
+if not na(cycleProgress) and cycleProgress > sellEndPct and strategy.position_size > 0
+    strategy.close("Halving Buy", comment="Cycle End Exit")
+
+// === PLOTTING ===
+bgcolor(inBuyZone ? color.new(color.green, 85) : na, title="Buy Zone")
+bgcolor(inSellZone ? color.new(color.red, 85) : na, title="Sell Zone")
+
+plot(useEmaFilter ? emaVal : na, "EMA", color=color.orange, linewidth=2)
+
+// Cycle progress indicator
+plot(cycleProgress * 100, "Cycle Progress %", color=color.blue, display=display.status_line)
+
+// Entry/exit markers
+plotshape(buyCondition and strategy.position_size == 0, "Buy Signal", shape.triangleup, location.belowbar, color.green, size=size.small)
+plotshape(sellCondition and strategy.position_size > 0, "Sell Signal", shape.triangledown, location.abovebar, color.red, size=size.small)
